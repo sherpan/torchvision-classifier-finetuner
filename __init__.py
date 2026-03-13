@@ -233,7 +233,7 @@ class TorchvisionClassifierFinetuner(foo.Operator):
 
         inputs.int(
             "num_workers",
-            default=4,
+            default=0,
             required=False,
             label="DataLoader workers",
             description="Number of parallel workers for data loading",
@@ -261,7 +261,7 @@ class TorchvisionClassifierFinetuner(foo.Operator):
         learning_rate = ctx.params["learning_rate"]
         weight_decay = ctx.params.get("weight_decay", 1e-4)
         img_size = ctx.params.get("img_size", 224)
-        num_workers = ctx.params.get("num_workers", 4)
+        num_workers = ctx.params.get("num_workers", 0)
         target_device_index = ctx.params.get("target_device_index", 0)
 
         dataset = ctx.dataset

@@ -75,7 +75,7 @@ op.execute(
 | `learning_rate` | float | 1e-4 | Initial learning rate for AdamW |
 | `weight_decay` | float | 1e-4 | L2 regularization coefficient |
 | `img_size` | int | 224 | Input image size (square, in pixels) |
-| `num_workers` | int | 4 | DataLoader worker processes |
+| `num_workers` | int | 0 | DataLoader worker processes |
 | `target_device_index` | int | 0 | CUDA GPU index (ignored if no GPU is present) |
 
 ### Supported model architectures
