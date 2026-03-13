@@ -1,6 +1,20 @@
 import os
+import sys
 import random
 import logging
+
+# Ensure spawned DataLoader worker processes can import this plugin module.
+# The plugin module name (@smehta73/torchvision-classifier-finetuner) contains
+# characters that are not valid Python identifiers, so workers cannot find it
+# via the normal import machinery. Adding the plugins parent dir to sys.path
+# and PYTHONPATH makes the module resolvable under its directory name instead.
+_plugin_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _plugin_parent not in sys.path:
+    sys.path.insert(0, _plugin_parent)
+_pypath = os.environ.get("PYTHONPATH", "")
+if _plugin_parent not in _pypath.split(os.pathsep):
+    os.environ["PYTHONPATH"] = _plugin_parent + (os.pathsep + _pypath if _pypath else "")
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -113,7 +127,7 @@ class TorchvisionClassifierFinetuner(foo.Operator):
             description="Fine-tune a torchvision image classification model on a FiftyOne classification field",
             icon="model_training",
             dynamic=True,
-            allow_immediate_execution=True,
+            allow_immediate_execution=False,
             allow_delegated_execution=True,
             default_choice_to_delegated=True,
         )
@@ -308,10 +322,12 @@ class TorchvisionClassifierFinetuner(foo.Operator):
         train_loader = DataLoader(
             train_ds, batch_size=batch_size, shuffle=True,
             num_workers=num_workers, pin_memory=(device.type == "cuda"),
+            multiprocessing_context="spawn" if num_workers > 0 else None,
         )
         val_loader = DataLoader(
             val_ds, batch_size=batch_size, shuffle=False,
             num_workers=num_workers, pin_memory=(device.type == "cuda"),
+            multiprocessing_context="spawn" if num_workers > 0 else None,
         )
 
         # --- Build model ---
