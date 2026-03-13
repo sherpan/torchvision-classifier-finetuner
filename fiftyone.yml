@@ -1,0 +1,9 @@
+name: "@smehta73/torchvision-classifier-finetuner"
+type: plugin
+version: "1.0.0"
+description: "Fine-tune a torchvision image classification model on a FiftyOne classification field"
+fiftyone:
+  version: ">=1.2.0"
+
+operators:
+  - torchvision-classifier-finetuner
