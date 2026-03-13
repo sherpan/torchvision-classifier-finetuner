@@ -7,7 +7,7 @@ A [FiftyOne plugin](https://docs.voxel51.com/plugins/index.html) operator that f
 - Fine-tune ResNet-50, EfficientNet-B2, or MobileNetV3-Large on any FiftyOne `Classification` field
 - Auto train/val split, configurable hyperparameters, and best-checkpoint saving
 - Export to local, GCS, or S3 paths
-- Uses [`fiftyone.utils.torch`](https://docs.voxel51.com/api/fiftyone.utils.torch.html) (`fout`) as the recommended bridge between FiftyOne datasets and PyTorch — providing a native `torch.utils.data.Dataset` wrapper around any `DatasetView`
+- Uses `FiftyOneClassificationDataset` (`dataset.py`) — a lightweight `torch.utils.data.Dataset` that wraps [`fout.TorchImageDataset`](https://docs.voxel51.com/api/fiftyone.utils.torch.html), automatically filters samples with missing labels, and returns `(image_tensor, class_index)` pairs ready for training
 
 ## What it does
 
@@ -92,7 +92,12 @@ op.execute(
 
 ## Customizing for your use case
 
-All customization lives in `__init__.py`. Below are the most common changes and exactly where to make them.
+The plugin is split across two files:
+
+- **`__init__.py`** — operator definition, model building, training loop, and export logic
+- **`dataset.py`** — `FiftyOneClassificationDataset`, the PyTorch `Dataset` used during training
+
+Below are the most common changes and exactly where to make them.
 
 ### Add a new model backbone
 
@@ -135,6 +140,24 @@ def get_transforms(img_size, is_train):
                                  std=[0.229, 0.224, 0.225]),
         ])
     # ... validation branch unchanged
+```
+
+### Customize how samples are loaded
+
+`FiftyOneClassificationDataset` in `dataset.py` handles filtering and label mapping. To add extra filtering (e.g., skip low-confidence samples) or support multi-label fields, edit the constructor loop:
+
+```python
+# dataset.py  __init__()
+for sample in view.iter_samples():
+    label_obj = sample.get_field(label_field)
+    if label_obj is None or label_obj.label is None:
+        continue
+    # Example: skip samples with confidence below a threshold
+    if label_obj.confidence is not None and label_obj.confidence < 0.9:
+        continue
+    label_str = label_obj.label
+    if label_str in class_to_idx:
+        self._label_map[sample.id] = class_to_idx[label_str]
 ```
 
 ### Change the optimizer or learning rate schedule

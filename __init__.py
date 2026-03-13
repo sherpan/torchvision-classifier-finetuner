@@ -3,27 +3,27 @@ import sys
 import random
 import logging
 
-# Ensure spawned DataLoader worker processes can import this plugin module.
+# Ensure spawned DataLoader worker processes can import dataset.py.
 # The plugin module name (@smehta73/torchvision-classifier-finetuner) contains
-# characters that are not valid Python identifiers, so workers cannot find it
-# via the normal import machinery. Adding the plugins parent dir to sys.path
-# and PYTHONPATH makes the module resolvable under its directory name instead.
-_plugin_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _plugin_parent not in sys.path:
-    sys.path.insert(0, _plugin_parent)
+# characters that are not valid Python identifiers, so FiftyOneClassificationDataset
+# lives in dataset.py instead. Adding the plugin directory to sys.path/PYTHONPATH
+# lets workers do `import dataset` with a valid module name.
+_plugin_dir = os.path.dirname(os.path.abspath(__file__))
+if _plugin_dir not in sys.path:
+    sys.path.insert(0, _plugin_dir)
 _pypath = os.environ.get("PYTHONPATH", "")
-if _plugin_parent not in _pypath.split(os.pathsep):
-    os.environ["PYTHONPATH"] = _plugin_parent + (os.pathsep + _pypath if _pypath else "")
+if _plugin_dir not in _pypath.split(os.pathsep):
+    os.environ["PYTHONPATH"] = _plugin_dir + (os.pathsep + _pypath if _pypath else "")
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 import fiftyone as fo
 import fiftyone.operators as foo
 import fiftyone.operators.types as types
 import fiftyone.core.storage as fos
-import fiftyone.utils.torch as fout
+from dataset import FiftyOneClassificationDataset
 
 logger = logging.getLogger("fiftyone.core.collections")
 
@@ -35,39 +35,6 @@ SUPPORTED_MODELS = {
     "mobilenet_v3_large": "MobileNetV3-Large",
 }
 
-
-class FiftyOneClassificationDataset(Dataset):
-    """Wraps fout.TorchImageDataset and pairs each image with its integer class label."""
-
-    def __init__(self, view, label_field, class_to_idx, transform=None):
-        # Build sample_id -> class_index map from the view
-        self._label_map = {}
-        for sample in view.iter_samples():
-            label_obj = sample.get_field(label_field)
-            if label_obj is None or label_obj.label is None:
-                continue
-            label_str = label_obj.label
-            if label_str in class_to_idx:
-                self._label_map[sample.id] = class_to_idx[label_str]
-
-        # Filter view to only samples that have a valid label
-        valid_ids = list(self._label_map.keys())
-        valid_view = view.select(valid_ids)
-
-        self._img_ds = fout.TorchImageDataset(
-            samples=valid_view,
-            include_ids=True,
-            transform=transform,
-            force_rgb=True,
-            download=True,
-        )
-
-    def __len__(self):
-        return len(self._img_ds)
-
-    def __getitem__(self, idx):
-        img, sample_id = self._img_ds[idx]
-        return img, self._label_map[sample_id]
 
 
 def build_model(model_name, num_classes, pretrained=True):
