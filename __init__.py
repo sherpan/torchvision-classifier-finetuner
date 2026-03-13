@@ -171,7 +171,7 @@ class TorchvisionClassifierFinetuner(foo.Operator):
         inputs.str(
             "export_uri",
             required=True,
-            default="/tmp/torchvision_classifier/finetuned_model.pt",
+            default="gs://my-bucket/torchvision_classifier/finetuned_model.pt",
             label="Output model path",
             description="Local or cloud (GCS/S3) path to save the fine-tuned model weights (.pt)",
         )
