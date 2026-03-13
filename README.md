@@ -2,6 +2,13 @@
 
 A [FiftyOne plugin](https://docs.voxel51.com/plugins/index.html) operator that fine-tunes a pretrained torchvision image classification model on any labeled FiftyOne dataset — directly from the UI or Python API, no training boilerplate required.
 
+## Features
+
+- Fine-tune ResNet-50, EfficientNet-B2, or MobileNetV3-Large on any FiftyOne `Classification` field
+- Auto train/val split, configurable hyperparameters, and best-checkpoint saving
+- Export to local, GCS, or S3 paths
+- Uses [`fiftyone.utils.torch`](https://docs.voxel51.com/api/fiftyone.utils.torch.html) (`fout`) as the recommended bridge between FiftyOne datasets and PyTorch — providing a native `torch.utils.data.Dataset` wrapper around any `DatasetView`
+
 ## What it does
 
 The plugin performs transfer learning on top of a pretrained image classification backbone. Given a FiftyOne dataset with a `Classification` label field, it will:
