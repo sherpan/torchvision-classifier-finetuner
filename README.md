@@ -16,24 +16,9 @@ The returned checkpoint is a `.pt` file containing the weights plus metadata (ar
 
 ---
 
-## Installation
-
-```bash
-fiftyone plugins download https://github.com/smehta73/torchvision-classifier-finetuner
-```
-
-Or clone and install locally:
-
-```bash
-git clone https://github.com/smehta73/torchvision-classifier-finetuner
-fiftyone plugins local-install torchvision-classifier-finetuner
-```
-
-### Dependencies
-
-```bash
-pip install torch torchvision fiftyone Pillow
-```
+## Dataset requirements
+- The specified `label_field` must contain `fo.Classification` labels.
+- If your dataset already has `"train"` and `"val"` tags on samples, those splits will be used. Otherwise the plugin automatically tags 80% as `"train"` and 20% as `"val"`.
 
 ---
 
@@ -43,7 +28,7 @@ pip install torch torchvision fiftyone Pillow
 
 1. Open a dataset with a `Classification` label field.
 2. Click the **Fine-tune Classifier** button in the Samples Grid secondary actions bar.
-3. Fill in the input form and click **Execute** (or **Schedule** for delegated background execution).
+3. Fill in the input form and click **Schedule** to run the fine-tuning job as a delegated operator.
 
 ### From Python
 
@@ -96,13 +81,7 @@ op.execute(
 
 ---
 
-## Dataset requirements
 
-- Samples must have image filepaths that exist on disk.
-- The specified `label_field` must contain `fo.Classification` labels.
-- If your dataset already has `"train"` and `"val"` tags on samples, those splits will be used. Otherwise the plugin automatically tags 80% as `"train"` and 20% as `"val"`.
-
----
 
 ## Customizing for your use case
 
@@ -194,44 +173,6 @@ criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
 ```
 
 ---
-
-## Output checkpoint format
-
-The saved `.pt` file is a plain Python dict loadable with `torch.load()`:
-
-```python
-checkpoint = torch.load("my_model.pt")
-# Keys:
-# checkpoint["model_name"]      -> e.g. "resnet50"
-# checkpoint["num_classes"]     -> int
-# checkpoint["classes"]         -> list of class label strings
-# checkpoint["class_to_idx"]    -> dict mapping label -> int index
-# checkpoint["img_size"]        -> int
-# checkpoint["state_dict"]      -> OrderedDict of model weights
-# checkpoint["best_val_acc"]    -> float (0–1)
-```
-
-### Loading the checkpoint for inference
-
-```python
-import torch, torchvision
-import torch.nn as nn
-
-ckpt = torch.load("my_model.pt")
-model = getattr(torchvision.models, ckpt["model_name"])(weights=None)
-
-# Replace head (same logic as build_model)
-if hasattr(model, "fc"):
-    model.fc = nn.Linear(model.fc.in_features, ckpt["num_classes"])
-elif hasattr(model, "classifier"):
-    model.classifier[-1] = nn.Linear(model.classifier[-1].in_features, ckpt["num_classes"])
-
-model.load_state_dict(ckpt["state_dict"])
-model.eval()
-```
-
----
-
 ## License
 
 MIT
