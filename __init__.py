@@ -24,64 +24,13 @@ import fiftyone.operators as foo
 import fiftyone.operators.types as types
 import fiftyone.core.storage as fos
 from dataset import FiftyOneClassificationDataset
+from models import build_model, SUPPORTED_MODELS
+from transforms import get_transforms
+from trainer import train
 
 logger = logging.getLogger("fiftyone.core.collections")
 
 TRAIN_ROOT = "/tmp/torchvision_classifier/"
-
-SUPPORTED_MODELS = {
-    "resnet50": "ResNet-50",
-    "efficientnet_b2": "EfficientNet-B2",
-    "mobilenet_v3_large": "MobileNetV3-Large",
-}
-
-
-
-def build_model(model_name, num_classes, pretrained=True):
-    """Load a torchvision model and replace its classification head."""
-    import torchvision.models as models
-
-    weights_arg = "DEFAULT" if pretrained else None
-
-    if model_name == "resnet50":
-        model = models.resnet50(weights=weights_arg)
-        model.fc = nn.Linear(model.fc.in_features, num_classes)
-    elif model_name == "efficientnet_b2":
-        model = models.efficientnet_b2(weights=weights_arg)
-        in_features = model.classifier[1].in_features
-        model.classifier[1] = nn.Linear(in_features, num_classes)
-    elif model_name == "mobilenet_v3_large":
-        model = models.mobilenet_v3_large(weights=weights_arg)
-        in_features = model.classifier[3].in_features
-        model.classifier[3] = nn.Linear(in_features, num_classes)
-    else:
-        raise ValueError(f"Unsupported model: {model_name}")
-
-    return model
-
-
-def get_transforms(img_size=224):
-    """Standard ImageNet-style transforms for train and val."""
-    from torchvision import transforms
-
-    train_transform = transforms.Compose([
-        transforms.RandomResizedCrop(img_size),
-        transforms.RandomHorizontalFlip(),
-        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                             std=[0.229, 0.224, 0.225]),
-    ])
-
-    val_transform = transforms.Compose([
-        transforms.Resize(int(img_size * 1.14)),
-        transforms.CenterCrop(img_size),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                             std=[0.229, 0.224, 0.225]),
-    ])
-
-    return train_transform, val_transform
 
 
 class TorchvisionClassifierFinetuner(foo.Operator):
@@ -315,82 +264,11 @@ class TorchvisionClassifierFinetuner(foo.Operator):
             f"img_size={img_size}, device={device}"
         )
 
-        # --- Training loop ---
-        best_val_acc = 0.0
-        best_state = None
-        num_train_batches = len(train_loader)
-        log_interval = max(1, num_train_batches // 4)  # log ~4 times per epoch
-
-        for epoch in range(epochs):
-            # Train
-            model.train()
-            running_loss = 0.0
-            correct = 0
-            total = 0
-
-            for batch_idx, (batch_imgs, batch_labels) in enumerate(train_loader):
-                batch_imgs = batch_imgs.to(device)
-                batch_labels = batch_labels.to(device)
-
-                optimizer.zero_grad()
-                outputs = model(batch_imgs)
-                loss = criterion(outputs, batch_labels)
-                loss.backward()
-                optimizer.step()
-
-                running_loss += loss.item() * batch_imgs.size(0)
-                _, predicted = outputs.max(1)
-                correct += predicted.eq(batch_labels).sum().item()
-                total += batch_imgs.size(0)
-
-                if (batch_idx + 1) % log_interval == 0 or (batch_idx + 1) == num_train_batches:
-                    batch_loss = running_loss / max(total, 1)
-                    batch_acc = correct / max(total, 1)
-                    logger.warning(
-                        f"  Epoch {epoch + 1}/{epochs} "
-                        f"[{batch_idx + 1}/{num_train_batches}] "
-                        f"loss: {batch_loss:.4f}, acc: {batch_acc:.3f}"
-                    )
-
-            train_loss = running_loss / max(total, 1)
-            train_acc = correct / max(total, 1)
-
-            # Validate
-            model.eval()
-            val_correct = 0
-            val_total = 0
-            val_loss = 0.0
-
-            with torch.no_grad():
-                for batch_imgs, batch_labels in val_loader:
-                    batch_imgs = batch_imgs.to(device)
-                    batch_labels = batch_labels.to(device)
-                    outputs = model(batch_imgs)
-                    loss = criterion(outputs, batch_labels)
-                    val_loss += loss.item() * batch_imgs.size(0)
-                    _, predicted = outputs.max(1)
-                    val_correct += predicted.eq(batch_labels).sum().item()
-                    val_total += batch_imgs.size(0)
-
-            val_acc = val_correct / max(val_total, 1)
-            val_loss = val_loss / max(val_total, 1)
-            current_lr = scheduler.get_last_lr()[0]
-            scheduler.step()
-
-            new_best = val_acc > best_val_acc
-            if new_best:
-                best_val_acc = val_acc
-                best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-
-            progress = 0.1 + (epoch + 1) / epochs * 0.85
-            label = (
-                f"Epoch {epoch + 1}/{epochs} — "
-                f"train loss: {train_loss:.4f}, train acc: {train_acc:.3f}, "
-                f"val loss: {val_loss:.4f}, val acc: {val_acc:.3f}"
-            )
-            ctx.set_progress(progress=progress, label=label)
-            best_marker = " [NEW BEST]" if new_best else ""
-            logger.warning(f"{label}, lr: {current_lr:.2e}{best_marker}")
+        # --- Run training loop ---
+        result = train(model, train_loader, val_loader, criterion, optimizer, scheduler,
+                       epochs, device, ctx)
+        best_val_acc = result["best_val_acc"]
+        best_state = result["best_state"]
 
         # --- Save best checkpoint ---
         ctx.set_progress(progress=0.96, label="Saving model checkpoint...")

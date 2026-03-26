@@ -8,6 +8,7 @@ A [FiftyOne plugin](https://docs.voxel51.com/plugins/index.html) operator that f
 - Auto train/val split, configurable hyperparameters, and best-checkpoint saving
 - Export to local, GCS, or S3 paths
 - Uses `FiftyOneClassificationDataset` (`dataset.py`) — a lightweight `torch.utils.data.Dataset` that wraps [`fout.TorchImageDataset`](https://docs.voxel51.com/api/fiftyone.utils.torch.html), automatically filters samples with missing labels, and returns `(image_tensor, class_index)` pairs ready for training
+- Modular file layout: model building (`models.py`), data augmentation (`transforms.py`), and the training loop (`trainer.py`) are each in their own focused module — making the plugin easy to extend without touching unrelated code
 
 ## What it does
 
@@ -92,31 +93,44 @@ op.execute(
 
 ## Customizing for your use case
 
-The plugin is split across two files:
+The plugin is split into focused modules — each covering one concern. Edit only the file relevant to what you want to change:
 
-- **`__init__.py`** — operator definition, model building, training loop, and export logic
-- **`dataset.py`** — `FiftyOneClassificationDataset`, the PyTorch `Dataset` used during training
+| Goal | File to edit |
+|---|---|
+| Add a new backbone (ViT, ConvNeXt, etc.) | `models.py` |
+| Change data augmentation | `transforms.py` |
+| Swap loss function (label smoothing, focal loss) | `__init__.py` — one line in `execute()` |
+| Swap optimizer or LR scheduler | `__init__.py` — one line in `execute()` |
+| Change train/val split ratio or strategy | `__init__.py` — `execute()` split section |
+| Change how samples are filtered or loaded | `dataset.py` |
+| Run the training loop standalone (no FiftyOne) | Import and call `trainer.train()` directly |
 
-Below are the most common changes and exactly where to make them.
+### File responsibilities
+
+- **`models.py`** — `build_model()` + `SUPPORTED_MODELS` dict. The UI dropdown auto-populates from `SUPPORTED_MODELS`, so adding a key here is all it takes to expose a new architecture.
+- **`transforms.py`** — `get_transforms()`. Augmentation changes stay fully isolated from training logic.
+- **`trainer.py`** — `train()` function. Accepts model, loaders, criterion, optimizer, scheduler, epochs, device, and ctx. Returns `best_val_acc` and `best_state`. Can be imported and called outside of FiftyOne.
+- **`dataset.py`** — `FiftyOneClassificationDataset`. Handles label filtering and mapping between FiftyOne sample IDs and integer class indices.
+- **`__init__.py`** — Thin operator shell. `execute()` wires together the modules: discovers classes, handles the train/val split, builds dataloaders, constructs criterion/optimizer/scheduler, calls `trainer.train()`, and saves the checkpoint.
 
 ### Add a new model backbone
 
-Edit the `SUPPORTED_MODELS` dict near the top of `__init__.py` and the `build_model()` function:
+Edit `models.py`:
 
 ```python
-# __init__.py  ~line 18
+# models.py
 SUPPORTED_MODELS = {
     "resnet50": "ResNet-50",
     "efficientnet_b2": "EfficientNet-B2",
     "mobilenet_v3_large": "MobileNetV3-Large",
-    "vit_b_16": "ViT-B/16",          # <-- add your entry here
+    "vit_b_16": "ViT-B/16",   # <-- add entry here
 }
 
-# __init__.py  build_model()  ~line 59
-def build_model(model_name, num_classes):
+def build_model(model_name, num_classes, pretrained=True):
+    ...
     if model_name == "vit_b_16":
-        weights = torchvision.models.ViT_B_16_Weights.DEFAULT
-        model = torchvision.models.vit_b_16(weights=weights)
+        weights = models.ViT_B_16_Weights.DEFAULT if pretrained else None
+        model = models.vit_b_16(weights=weights)
         in_features = model.heads.head.in_features
         model.heads.head = nn.Linear(in_features, num_classes)
         return model
@@ -125,7 +139,7 @@ def build_model(model_name, num_classes):
 
 ### Change data augmentation
 
-Edit `get_transforms()` (~line 82). The training pipeline currently uses `RandomResizedCrop`, `RandomHorizontalFlip`, and `ColorJitter`. Add or replace transforms here:
+Edit `transforms.py`:
 
 ```python
 def get_transforms(img_size, is_train):
@@ -133,21 +147,56 @@ def get_transforms(img_size, is_train):
         return transforms.Compose([
             transforms.RandomResizedCrop(img_size),
             transforms.RandomHorizontalFlip(),
-            transforms.RandomVerticalFlip(),        # add vertical flip
             transforms.RandAugment(),               # swap in RandAugment
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                  std=[0.229, 0.224, 0.225]),
         ])
-    # ... validation branch unchanged
+```
+
+### Change the loss function
+
+In `execute()` in `__init__.py`:
+
+```python
+# e.g. label smoothing
+criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+```
+
+### Change the optimizer or learning rate schedule
+
+In `execute()` in `__init__.py`:
+
+```python
+# Example: switch to SGD with StepLR
+optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9, weight_decay=wd)
+scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
+```
+
+### Freeze the backbone (linear-probe style)
+
+In `execute()` in `__init__.py`, after `build_model()`:
+
+```python
+model = build_model(model_name, num_classes)
+for name, param in model.named_parameters():
+    if "fc" not in name and "classifier" not in name and "heads" not in name:
+        param.requires_grad = False
+```
+
+### Change the train/val split ratio
+
+In `execute()` in `__init__.py`:
+
+```python
+train_ratio = 0.8   # <-- adjust this
 ```
 
 ### Customize how samples are loaded
 
-`FiftyOneClassificationDataset` in `dataset.py` handles filtering and label mapping. To add extra filtering (e.g., skip low-confidence samples) or support multi-label fields, edit the constructor loop:
+Edit the constructor loop in `dataset.py`:
 
 ```python
-# dataset.py  __init__()
 for sample in view.iter_samples():
     label_obj = sample.get_field(label_field)
     if label_obj is None or label_obj.label is None:
@@ -160,46 +209,20 @@ for sample in view.iter_samples():
         self._label_map[sample.id] = class_to_idx[label_str]
 ```
 
-### Change the optimizer or learning rate schedule
+### Use the trainer standalone (without FiftyOne operator)
 
-In the `execute()` method (~line 323):
-
-```python
-# Current
-optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
-
-# Example: switch to SGD with StepLR
-optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9, weight_decay=wd)
-scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
-```
-
-### Freeze the backbone (linear-probe style)
-
-After `build_model()` is called in `execute()`, freeze all layers except the classification head:
+`trainer.train()` has no FiftyOne operator dependency beyond `ctx.set_progress`. Pass a lightweight context stub if running outside the plugin:
 
 ```python
-model = build_model(model_name, num_classes)
-for name, param in model.named_parameters():
-    if "fc" not in name and "classifier" not in name and "heads" not in name:
-        param.requires_grad = False
-```
+from trainer import train
 
-### Change the train/val split ratio
+class DummyCtx:
+    def set_progress(self, progress, label=""): print(f"{progress:.0%} {label}")
 
-The auto-split logic is in `execute()` (~line 280). Change `0.8` to your desired training fraction:
-
-```python
-train_ratio = 0.8   # <-- adjust this
-```
-
-### Use a different loss function
-
-In the training loop (~line 350), replace `nn.CrossEntropyLoss` with any PyTorch loss:
-
-```python
-# e.g. label smoothing
-criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+result = train(model, train_loader, val_loader, criterion, optimizer, scheduler,
+               epochs=10, device=device, ctx=DummyCtx())
+best_state = result["best_state"]
+best_val_acc = result["best_val_acc"]
 ```
 
 ---
