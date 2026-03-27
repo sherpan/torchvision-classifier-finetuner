@@ -1,12 +1,14 @@
 # torchvision-classifier-finetuner
 
-A [FiftyOne plugin](https://docs.voxel51.com/plugins/index.html) operator that fine-tunes a pretrained torchvision image classification model on any labeled FiftyOne dataset — directly from the UI or Python API, no training boilerplate required.
+A [FiftyOne plugin](https://docs.voxel51.com/plugins/index.html) with two operators: one to fine-tune a pretrained torchvision image classification model on any labeled FiftyOne dataset, and one to run inference with the saved checkpoint — all directly from the UI or Python API, no training boilerplate required.
 
 ## Features
 
 - Fine-tune ResNet-50, EfficientNet-B2, or MobileNetV3-Large on any FiftyOne `Classification` field
+- Run inference with a saved checkpoint and write predicted labels back to your dataset
 - Auto train/val split, configurable hyperparameters, and best-checkpoint saving
-- Export to local, GCS, or S3 paths
+- Export to local, GCS, or S3 paths; inference loads from the same locations
+- Pre-downloads cloud media before DataLoader construction so worker processes always hit local files
 - Uses `FiftyOneClassificationDataset` (`dataset.py`) — a lightweight `torch.utils.data.Dataset` that wraps [`fout.TorchImageDataset`](https://docs.voxel51.com/api/fiftyone.utils.torch.html), automatically filters samples with missing labels, and returns `(image_tensor, class_index)` pairs ready for training
 - Modular file layout: model building (`models.py`), data augmentation (`transforms.py`), and the training loop (`trainer.py`) are each in their own focused module — making the plugin easy to extend without touching unrelated code
 
@@ -64,7 +66,53 @@ op.execute(
 
 ---
 
-## Parameters
+## Inference operator
+
+Once you have a fine-tuned checkpoint, use the **Run Torchvision Classifier Inference** operator to write predictions back to any FiftyOne view — without leaving the app.
+
+### From the FiftyOne UI
+
+1. Open the dataset (or any view/slice) you want to run inference on.
+2. Click the **Run Torchvision Classifier Inference** button in the Samples Grid secondary actions bar.
+3. Point the file picker at your `.pt` checkpoint (local or cloud path), set an output field name, and click **Execute**.
+
+### From Python
+
+```python
+import fiftyone as fo
+import fiftyone.operators as foo
+
+dataset = fo.load_dataset("my_dataset")
+
+op = foo.get_operator("@smehta73/torchvision-classifier-inference")
+op.execute(
+    fo.OperatorExecutionContext(
+        dataset=dataset,
+        params={
+            "model_uri": {"absolute_path": "gs://my-bucket/torchvision_classifier/best.pt"},
+            "label_field": "predicted_label",
+            "batch_size": 64,
+            "num_workers": 4,
+        },
+    )
+)
+```
+
+### Inference parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `model_uri` | file | — | Path to the `.pt` checkpoint (local, `gs://`, or `s3://`) |
+| `label_field` | string | `predicted_label` | Field name to write `fo.Classification` predictions into |
+| `batch_size` | int | 64 | Images per inference batch |
+| `num_workers` | int | 4 | DataLoader worker processes |
+| `target_device_index` | int | 0 | CUDA GPU index (ignored on MPS/CPU) |
+
+The checkpoint is self-contained — it stores the architecture name, class labels, and image size, so you never need to re-specify them at inference time.
+
+---
+
+## Fine-tuner parameters
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
