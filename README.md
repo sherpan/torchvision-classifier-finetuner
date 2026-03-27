@@ -2,6 +2,8 @@
 
 A [FiftyOne plugin](https://docs.voxel51.com/plugins/index.html) with two operators: one to fine-tune a pretrained torchvision image classification model on any labeled FiftyOne dataset, and one to run inference with the saved checkpoint — all directly from the UI or Python API, no training boilerplate required.
 
+![Fine-tuner demo](screenshots/ft_gif.gif)
+
 ## Features
 
 - Fine-tune ResNet-50, EfficientNet-B2, or MobileNetV3-Large on any FiftyOne `Classification` field
