@@ -112,9 +112,7 @@ op.execute(
 
 The checkpoint is self-contained — it stores the architecture name, class labels, and image size, so you never need to re-specify them at inference time.
 
----
-
-## Fine-tuner parameters
+### Fine-tuner parameters
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -153,13 +151,12 @@ The plugin is split into focused modules — each covering one concern. Edit onl
 | Swap optimizer or LR scheduler | `__init__.py` — one line in `execute()` |
 | Change train/val split ratio or strategy | `__init__.py` — `execute()` split section |
 | Change how samples are filtered or loaded | `dataset.py` |
-| Run the training loop standalone (no FiftyOne) | Import and call `trainer.train()` directly |
 
 ### File responsibilities
 
 - **`models.py`** — `build_model()` + `SUPPORTED_MODELS` dict. The UI dropdown auto-populates from `SUPPORTED_MODELS`, so adding a key here is all it takes to expose a new architecture.
 - **`transforms.py`** — `get_transforms()`. Augmentation changes stay fully isolated from training logic.
-- **`trainer.py`** — `train()` function. Accepts model, loaders, criterion, optimizer, scheduler, epochs, device, and ctx. Returns `best_val_acc` and `best_state`. Can be imported and called outside of FiftyOne.
+- **`trainer.py`** — `train()` function. Accepts model, loaders, criterion, optimizer, scheduler, epochs, device, and ctx. Returns `best_val_acc` and `best_state`.
 - **`dataset.py`** — `FiftyOneClassificationDataset`. Handles label filtering and mapping between FiftyOne sample IDs and integer class indices.
 - **`__init__.py`** — Thin operator shell. `execute()` wires together the modules: discovers classes, handles the train/val split, builds dataloaders, constructs criterion/optimizer/scheduler, calls `trainer.train()`, and saves the checkpoint.
 
@@ -257,22 +254,6 @@ for sample in view.iter_samples():
     label_str = label_obj.label
     if label_str in class_to_idx:
         self._label_map[sample.id] = class_to_idx[label_str]
-```
-
-### Use the trainer standalone (without FiftyOne operator)
-
-`trainer.train()` has no FiftyOne operator dependency beyond `ctx.set_progress`. Pass a lightweight context stub if running outside the plugin:
-
-```python
-from trainer import train
-
-class DummyCtx:
-    def set_progress(self, progress, label=""): print(f"{progress:.0%} {label}")
-
-result = train(model, train_loader, val_loader, criterion, optimizer, scheduler,
-               epochs=10, device=device, ctx=DummyCtx())
-best_state = result["best_state"]
-best_val_acc = result["best_val_acc"]
 ```
 
 ---
