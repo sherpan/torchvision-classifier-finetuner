@@ -222,8 +222,12 @@ class TorchvisionClassifierFinetuner(foo.Operator):
                 f"Tagged {split_idx} train / {len(sample_ids) - split_idx} val samples"
             )
 
+        # --- Pre-download cloud media so DataLoader workers hit local files ---
+        ctx.set_progress(progress=0.05, label="Downloading media...")
+        dataset.download_media()
+
         # --- Build datasets & loaders ---
-        ctx.set_progress(progress=0.05, label="Building data loaders...")
+        ctx.set_progress(progress=0.07, label="Building data loaders...")
         train_transform, val_transform = get_transforms(img_size)
 
         train_ds = FiftyOneClassificationDataset(
@@ -315,5 +319,221 @@ class TorchvisionClassifierFinetuner(foo.Operator):
         )
 
 
+class TorchvisionClassifierInference(foo.Operator):
+
+    @property
+    def config(self):
+        return foo.OperatorConfig(
+            name="torchvision-classifier-inference",
+            label="Run Torchvision Classifier Inference",
+            description="Run inference with a fine-tuned torchvision classification model on the current view",
+            icon="model_training",
+            dynamic=True,
+            allow_immediate_execution=True,
+            allow_delegated_execution=True,
+            default_choice_to_delegated=False,
+        )
+
+    def resolve_placement(self, ctx):
+        return types.Placement(
+            types.Places.SAMPLES_GRID_SECONDARY_ACTIONS,
+            types.Button(
+                label="Run Torchvision Classifier Inference",
+                icon="model_training",
+                prompt=True,
+            ),
+        )
+
+    def resolve_input(self, ctx):
+        inputs = types.Object()
+
+        file_explorer = types.FileExplorerView(
+            choose_dir=False,
+            button_label="Choose model checkpoint",
+            default_path="gs://my-bucket/torchvision_classifier/",
+        )
+        inputs.file(
+            "model_uri",
+            required=True,
+            label="Model checkpoint",
+            description="Local or cloud (GCS/S3) .pt checkpoint saved by the fine-tuner",
+            view=file_explorer,
+        )
+
+        inputs.str(
+            "label_field",
+            required=True,
+            default="predicted_label",
+            label="Output label field",
+            description="FiftyOne field name to write predicted Classification labels into",
+        )
+
+        inputs.int(
+            "batch_size",
+            default=64,
+            required=False,
+            label="Batch size",
+            description="Number of images per inference batch (larger = faster on GPU)",
+        )
+
+        inputs.int(
+            "num_workers",
+            default=4,
+            required=False,
+            label="DataLoader workers",
+            description="Number of parallel workers for data loading",
+        )
+
+        inputs.int(
+            "target_device_index",
+            default=0,
+            required=False,
+            label="CUDA device index",
+            description="CUDA GPU device number to use (ignored on MPS/CPU)",
+        )
+
+        return types.Property(
+            inputs,
+            view=types.View(label="Run Torchvision Classifier Inference"),
+        )
+
+    def execute(self, ctx):
+        model_uri = ctx.params["model_uri"]["absolute_path"]
+        label_field = ctx.params["label_field"]
+        batch_size = ctx.params.get("batch_size", 64)
+        num_workers = ctx.params.get("num_workers", 4)
+        target_device_index = ctx.params.get("target_device_index", 0)
+
+        view = ctx.view
+
+        # --- Resolve device ---
+        cuda_count = torch.cuda.device_count()
+        if cuda_count > 0:
+            dev_idx = target_device_index if target_device_index < cuda_count else 0
+            device = torch.device(f"cuda:{dev_idx}")
+            logger.warning(f"[inference] Using CUDA device: cuda:{dev_idx}")
+        elif torch.backends.mps.is_available():
+            device = torch.device("mps")
+            logger.warning("[inference] Using Apple MPS (Metal) GPU")
+        else:
+            device = torch.device("cpu")
+            logger.warning("[inference] No GPU found, using CPU")
+
+        # --- Load checkpoint ---
+        ctx.set_progress(progress=0.02, label="Loading model checkpoint...")
+        os.makedirs(TRAIN_ROOT, exist_ok=True)
+        local_ckpt = os.path.join(TRAIN_ROOT, "inference_model.pt")
+        fos.copy_file(model_uri, local_ckpt)
+
+        ckpt = torch.load(local_ckpt, map_location="cpu", weights_only=True)
+        model_name = ckpt["model_name"]
+        classes = ckpt["classes"]
+        img_size = ckpt["img_size"]
+        num_classes = len(classes)
+
+        logger.warning(
+            f"[inference] Loaded checkpoint: model={model_name}, "
+            f"classes={num_classes}, img_size={img_size}"
+        )
+
+        # --- Rebuild model and load weights ---
+        ctx.set_progress(progress=0.05, label="Building model...")
+        model = build_model(model_name, num_classes, pretrained=False)
+        model.load_state_dict(ckpt["state_dict"])
+        model = model.to(device)
+        model.eval()
+
+        # --- Build inference transform (val-style, no augmentation) ---
+        _, infer_transform = get_transforms(img_size)
+
+        # --- Pre-download cloud media so DataLoader workers hit local files ---
+        ctx.set_progress(progress=0.08, label="Downloading media...")
+        view.download_media()
+
+        # --- Build DataLoader over the current view ---
+        ctx.set_progress(progress=0.10, label="Building data loader...")
+        import fiftyone.utils.torch as fout
+
+        img_ds = fout.TorchImageDataset(
+            samples=view,
+            include_ids=True,
+            transform=infer_transform,
+            force_rgb=True,
+            download=True,
+        )
+
+        loader = DataLoader(
+            img_ds,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=(device.type == "cuda"),
+            multiprocessing_context="spawn" if num_workers > 0 else None,
+            persistent_workers=(num_workers > 0),
+        )
+
+        # --- Run inference ---
+        ctx.set_progress(progress=0.12, label="Running inference...")
+        total = len(img_ds)
+        processed = 0
+        pred_map = {}  # sample_id -> fo.Classification
+
+        use_amp = device.type == "cuda"
+        autocast_ctx = (
+            torch.amp.autocast(device_type="cuda")
+            if use_amp
+            else torch.amp.autocast(device_type="cpu", enabled=False)
+        )
+
+        with torch.inference_mode(), autocast_ctx:
+            for imgs, sample_ids in loader:
+                imgs = imgs.to(device, non_blocking=True)
+                logits = model(imgs)
+                probs = torch.softmax(logits, dim=1)
+                confs, preds = probs.max(dim=1)
+
+                for sid, pred_idx, conf in zip(sample_ids, preds.tolist(), confs.tolist()):
+                    pred_map[sid] = fo.Classification(
+                        label=classes[pred_idx],
+                        confidence=conf,
+                    )
+
+                processed += len(sample_ids)
+                ctx.set_progress(
+                    progress=0.12 + (processed / max(total, 1)) * 0.83,
+                    label=f"Inference: {processed}/{total} samples",
+                )
+
+        # --- Bulk-write predictions back to the dataset ---
+        ctx.set_progress(progress=0.96, label="Saving predictions...")
+        view_ids = view.values("id")
+        classifications = [pred_map.get(sid) for sid in view_ids]
+        view.set_values(label_field, classifications)
+
+        ctx.set_progress(progress=1.0, label="Done!")
+        ctx.trigger("reload_dataset")
+
+        return {
+            "label_field": label_field,
+            "num_samples": processed,
+            "model_name": model_name,
+            "classes": ", ".join(classes),
+            "status": "success",
+        }
+
+    def resolve_output(self, ctx):
+        outputs = types.Object()
+        outputs.str("label_field", label="Predictions written to")
+        outputs.str("num_samples", label="Samples processed")
+        outputs.str("model_name", label="Model")
+        outputs.str("classes", label="Classes")
+        outputs.str("status", label="Status")
+        return types.Property(
+            outputs,
+            view=types.View(label="Inference Results"),
+        )
+
+
 def register(plugin):
     plugin.register(TorchvisionClassifierFinetuner)
+    plugin.register(TorchvisionClassifierInference)
