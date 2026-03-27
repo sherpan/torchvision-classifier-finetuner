@@ -331,7 +331,7 @@ class TorchvisionClassifierInference(foo.Operator):
             dynamic=True,
             allow_immediate_execution=True,
             allow_delegated_execution=True,
-            default_choice_to_delegated=False,
+            default_choice_to_delegated=True,
         )
 
     def resolve_placement(self, ctx):
