@@ -33,6 +33,24 @@ logger = logging.getLogger("fiftyone.core.collections")
 TRAIN_ROOT = "/tmp/torchvision_classifier/"
 
 
+def _verify_write_access(export_uri):
+    """Write a tiny sentinel to the destination directory to confirm write access.
+    Raises ValueError immediately if the path is inaccessible."""
+    import uuid
+
+    dir_path = os.path.dirname(export_uri.rstrip("/"))
+    test_path = f"{dir_path}/.write_access_test_{uuid.uuid4().hex[:8]}.tmp"
+
+    try:
+        fos.write_file("write_access_test", test_path)
+        fos.delete_file(test_path)
+    except Exception as e:
+        raise ValueError(
+            f"Cannot write to output path '{export_uri}': {e}\n"
+            "Check the bucket name and that your credentials have write access."
+        )
+
+
 class TorchvisionClassifierFinetuner(foo.Operator):
 
     @property
@@ -169,6 +187,9 @@ class TorchvisionClassifierFinetuner(foo.Operator):
         )
 
     def execute(self, ctx):
+        import time
+        _start = time.monotonic()
+
         label_field = ctx.params["label_field"]
         model_name = ctx.params["model_name"]
         export_uri = ctx.params["export_uri"]
@@ -181,6 +202,10 @@ class TorchvisionClassifierFinetuner(foo.Operator):
         target_device_index = ctx.params.get("target_device_index", 0)
 
         dataset = ctx.dataset
+
+        # --- Fast-fail: verify write access before any training work begins ---
+        ctx.set_progress(progress=0.01, label="Verifying output path access...")
+        _verify_write_access(export_uri)
 
         # --- Resolve device ---
         cuda_count = torch.cuda.device_count()
@@ -297,12 +322,18 @@ class TorchvisionClassifierFinetuner(foo.Operator):
         fos.copy_file(local_ckpt, export_uri)
         logger.warning(f"Saved best model (val_acc={best_val_acc:.4f}) to {export_uri}")
 
+        elapsed = time.monotonic() - _start
+        hours, remainder = divmod(int(elapsed), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        elapsed_str = f"{hours}h {minutes}m {seconds}s" if hours else f"{minutes}m {seconds}s"
+
         ctx.set_progress(progress=1.0, label="Done!")
         return {
             "export_uri": export_uri,
             "best_val_acc": round(best_val_acc, 4),
             "num_classes": num_classes,
             "classes": ", ".join(classes),
+            "elapsed": elapsed_str,
             "status": "success",
         }
 
@@ -312,6 +343,7 @@ class TorchvisionClassifierFinetuner(foo.Operator):
         outputs.str("best_val_acc", label="Best validation accuracy")
         outputs.str("num_classes", label="Number of classes")
         outputs.str("classes", label="Classes")
+        outputs.str("elapsed", label="Total training time")
         outputs.str("status", label="Status")
         return types.Property(
             outputs,
@@ -398,6 +430,9 @@ class TorchvisionClassifierInference(foo.Operator):
         )
 
     def execute(self, ctx):
+        import time
+        _start = time.monotonic()
+
         model_uri = ctx.params["model_uri"]["absolute_path"]
         label_field = ctx.params["label_field"]
         batch_size = ctx.params.get("batch_size", 64)
@@ -510,6 +545,11 @@ class TorchvisionClassifierInference(foo.Operator):
         classifications = [pred_map.get(sid) for sid in view_ids]
         view.set_values(label_field, classifications)
 
+        elapsed = time.monotonic() - _start
+        hours, remainder = divmod(int(elapsed), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        elapsed_str = f"{hours}h {minutes}m {seconds}s" if hours else f"{minutes}m {seconds}s"
+
         ctx.set_progress(progress=1.0, label="Done!")
         ctx.trigger("reload_dataset")
 
@@ -518,6 +558,7 @@ class TorchvisionClassifierInference(foo.Operator):
             "num_samples": processed,
             "model_name": model_name,
             "classes": ", ".join(classes),
+            "elapsed": elapsed_str,
             "status": "success",
         }
 
@@ -527,6 +568,7 @@ class TorchvisionClassifierInference(foo.Operator):
         outputs.str("num_samples", label="Samples processed")
         outputs.str("model_name", label="Model")
         outputs.str("classes", label="Classes")
+        outputs.str("elapsed", label="Total inference time")
         outputs.str("status", label="Status")
         return types.Property(
             outputs,
