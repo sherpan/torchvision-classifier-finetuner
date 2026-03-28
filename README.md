@@ -4,17 +4,7 @@ A [FiftyOne plugin](https://docs.voxel51.com/plugins/index.html) with two operat
 
 ![Fine-tuner demo](screenshots/ft_gif.gif)
 
-## Features
-
-- Fine-tune ResNet-50, EfficientNet-B2, or MobileNetV3-Large on any FiftyOne `Classification` field
-- Run inference with a saved checkpoint and write predicted labels back to your dataset
-- Auto train/val split, configurable hyperparameters, and best-checkpoint saving
-- Export to local, GCS, or S3 paths; inference loads from the same locations
-- Pre-downloads cloud media before DataLoader construction so worker processes always hit local files
-- Uses `FiftyOneClassificationDataset` (`dataset.py`) — a lightweight `torch.utils.data.Dataset` that wraps [`fout.TorchImageDataset`](https://docs.voxel51.com/api/fiftyone.utils.torch.html), automatically filters samples with missing labels, and returns `(image_tensor, class_index)` pairs ready for training
-- Modular file layout: model building (`models.py`), data augmentation (`transforms.py`), and the training loop (`trainer.py`) are each in their own focused module — making the plugin easy to extend without touching unrelated code
-
-## What it does
+## Overview
 
 The plugin performs transfer learning on top of a pretrained image classification backbone. Given a FiftyOne dataset with a `Classification` label field, it will:
 
@@ -24,7 +14,22 @@ The plugin performs transfer learning on top of a pretrained image classificatio
 4. Train with AdamW + CosineAnnealingLR for the specified number of epochs, saving the best checkpoint by validation accuracy.
 5. Export the checkpoint to a local path, GCS (`gs://…`), or S3 (`s3://…`).
 
-The returned checkpoint is a `.pt` file containing the weights plus metadata (architecture name, class labels, image size) so it can be reloaded for inference without re-specifying those details.
+The checkpoint is a `.pt` file containing the weights plus metadata (architecture name, class labels, image size) so it can be reloaded for inference without re-specifying those details.
+
+The companion inference operator loads the checkpoint and writes `fo.Classification` predictions directly onto your dataset. Because predictions are stored as native FiftyOne labels, they immediately unlock [FiftyOne's model evaluation suite](https://docs.voxel51.com/user_guide/evaluation.html) — letting you compute per-class metrics, visualize confusion matrices, and sort/filter by confidence or correctness from the app.
+
+**Supported architectures**
+
+| `model_name` | Architecture |
+|---|---|
+| `resnet50` | ResNet-50 |
+| `efficientnet_b2` | EfficientNet-B2 |
+| `mobilenet_v3_large` | MobileNetV3-Large |
+
+- Auto train/val split, configurable hyperparameters, and best-checkpoint saving
+- Export to local, GCS, or S3 paths; inference loads from the same locations
+- Pre-downloads cloud media before DataLoader construction so worker processes always hit local files
+- Modular file layout: model building (`models.py`), data augmentation (`transforms.py`), and the training loop (`trainer.py`) are each in their own focused module
 
 ---
 
@@ -34,7 +39,7 @@ The returned checkpoint is a `.pt` file containing the weights plus metadata (ar
 
 ---
 
-## Usage
+## Fine Tuning Operator
 
 ### From the FiftyOne UI
 
@@ -65,6 +70,21 @@ op.execute(
     )
 )
 ```
+
+### Fine-tuner parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `label_field` | string | — | The `Classification` field on your dataset to train on |
+| `model_name` | choice | `resnet50` | Backbone architecture (see supported models below) |
+| `export_uri` | string | — | Output path for the `.pt` checkpoint (local, `gs://`, or `s3://`) |
+| `epochs` | int | 10 | Number of training epochs |
+| `batch_size` | int | 32 | Mini-batch size |
+| `learning_rate` | float | 1e-4 | Initial learning rate for AdamW |
+| `weight_decay` | float | 1e-4 | L2 regularization coefficient |
+| `img_size` | int | 224 | Input image size (square, in pixels) |
+| `num_workers` | int | 0 | DataLoader worker processes |
+| `target_device_index` | int | 0 | CUDA GPU index (ignored if no GPU is present) |
 
 ---
 
@@ -111,29 +131,6 @@ op.execute(
 | `target_device_index` | int | 0 | CUDA GPU index (ignored on MPS/CPU) |
 
 The checkpoint is self-contained — it stores the architecture name, class labels, and image size, so you never need to re-specify them at inference time.
-
-### Fine-tuner parameters
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `label_field` | string | — | The `Classification` field on your dataset to train on |
-| `model_name` | choice | `resnet50` | Backbone architecture (see supported models below) |
-| `export_uri` | string | — | Output path for the `.pt` checkpoint (local, `gs://`, or `s3://`) |
-| `epochs` | int | 10 | Number of training epochs |
-| `batch_size` | int | 32 | Mini-batch size |
-| `learning_rate` | float | 1e-4 | Initial learning rate for AdamW |
-| `weight_decay` | float | 1e-4 | L2 regularization coefficient |
-| `img_size` | int | 224 | Input image size (square, in pixels) |
-| `num_workers` | int | 0 | DataLoader worker processes |
-| `target_device_index` | int | 0 | CUDA GPU index (ignored if no GPU is present) |
-
-### Supported model architectures
-
-| `model_name` value | Architecture |
-|--------------------|--------------|
-| `resnet50` | ResNet-50 |
-| `efficientnet_b2` | EfficientNet-B2 |
-| `mobilenet_v3_large` | MobileNetV3-Large |
 
 ---
 
