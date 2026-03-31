@@ -333,6 +333,7 @@ class TorchvisionClassifierFinetuner(foo.Operator):
             "best_val_acc": round(best_val_acc, 4),
             "num_classes": num_classes,
             "classes": ", ".join(classes),
+            "device": str(device),
             "elapsed": elapsed_str,
             "status": "success",
         }
@@ -343,6 +344,7 @@ class TorchvisionClassifierFinetuner(foo.Operator):
         outputs.str("best_val_acc", label="Best validation accuracy")
         outputs.str("num_classes", label="Number of classes")
         outputs.str("classes", label="Classes")
+        outputs.str("device", label="Device")
         outputs.str("elapsed", label="Total training time")
         outputs.str("status", label="Status")
         return types.Property(
@@ -558,6 +560,7 @@ class TorchvisionClassifierInference(foo.Operator):
             "num_samples": processed,
             "model_name": model_name,
             "classes": ", ".join(classes),
+            "device": str(device),
             "elapsed": elapsed_str,
             "status": "success",
         }
@@ -568,6 +571,7 @@ class TorchvisionClassifierInference(foo.Operator):
         outputs.str("num_samples", label="Samples processed")
         outputs.str("model_name", label="Model")
         outputs.str("classes", label="Classes")
+        outputs.str("device", label="Device")
         outputs.str("elapsed", label="Total inference time")
         outputs.str("status", label="Status")
         return types.Property(
