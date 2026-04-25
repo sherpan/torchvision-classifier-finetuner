@@ -247,12 +247,8 @@ class TorchvisionClassifierFinetuner(foo.Operator):
                 f"Tagged {split_idx} train / {len(sample_ids) - split_idx} val samples"
             )
 
-        # --- Pre-download cloud media so DataLoader workers hit local files ---
-        ctx.set_progress(progress=0.05, label="Downloading media...")
-        dataset.download_media()
-
         # --- Build datasets & loaders ---
-        ctx.set_progress(progress=0.07, label="Building data loaders...")
+        ctx.set_progress(progress=0.05, label="Downloading media and building data loaders...")
         train_transform, val_transform = get_transforms(img_size)
 
         train_ds = FiftyOneClassificationDataset(
